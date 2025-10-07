@@ -41,7 +41,8 @@ export interface Word {
     doculect: string,
     gloss: string,
     glossid: string,
-    syllables: string[]
+    syllables: string[],
+    syllables_parsed?: [string, string][]
 }
 
 export interface FstComparison {

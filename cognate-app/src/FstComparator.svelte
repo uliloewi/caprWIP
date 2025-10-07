@@ -5,6 +5,7 @@
     // import initialTransducers from "./initialTransducers"
     import FstOutput from "./FstOutput.svelte";
     import { Circle2 } from "svelte-loading-spinners";
+    import { apiFetch } from "./api";
 
     export let data: CognateApp;
     export let showNewFst = false;
@@ -27,9 +28,6 @@
     // Currently selected doculect list.
     export let selectedDoculects = [];
 
-    // TODO: move this to just replace call
-    let rootUrl = "/api"
-
     export let handleDebugComparison = async () => {};
 
     // Calls the comparison route with our FSTs, returning the new data.
@@ -44,7 +42,7 @@
             statusError = false;
             compilerErrors = [];
 
-            fetch(`${rootUrl}/compare-fst`, {
+            apiFetch(`/compare-fst`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -55,7 +53,9 @@
                     newTransducer: newFst,
                     board: {
                         columns: data.columns,
-                        boards: data.boards
+                        boards: data.boards,
+                        words: data.words,
+                        syllables: data.syllables
                     }
                 })
             })

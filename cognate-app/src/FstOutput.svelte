@@ -24,25 +24,35 @@
     //console.log(data);
 
     // Construct data into a format that works well for virtual lists
-    let listData = [].concat(...Object.keys(data.chapters).map(id => {
-        return [{isTitle: true, title: chapterTitles[id]}, ...data.chapters[id]]
-    }))
+    let listData = [];
 
-    // If we are missing a transducer, we gotta add in a column where it should have been!
-    if (data.missing_transducers.length > 0) {
-        let missingIndices = data.missing_transducers.map(n => langsUnderStudy.indexOf(n))
-        listData = listData.map(i => {
-            let n = i;
-            if (!n.isTitle) {
-                for (let j = 0; j < n.rows.length; j++) {
-                    for (let missingIndex of missingIndices) {
-                        n.rows[j].old_reconstructions.splice(missingIndex, 0, "")
-                        n.rows[j].new_reconstructions.splice(missingIndex, 0, "")
-                    }
+    $: if (data) {
+        const baseList = [].concat(...Object.keys(data.chapters).map(id => {
+            return [{ isTitle: true, title: chapterTitles[id] }, ...data.chapters[id]];
+        }));
+
+        if (data.missing_transducers.length > 0) {
+            const missingIndices = data.missing_transducers.map(n => langsUnderStudy.indexOf(n));
+            listData = baseList.map(item => {
+                if (item.isTitle) {
+                    return item;
                 }
-            }
-            return n;
-        })
+                const clonedRows = item.rows.map(row => {
+                    const oldRecs = [...row.old_reconstructions];
+                    const newRecs = [...row.new_reconstructions];
+                    for (const missingIndex of missingIndices) {
+                        if (missingIndex >= 0) {
+                            oldRecs.splice(missingIndex, 0, "");
+                            newRecs.splice(missingIndex, 0, "");
+                        }
+                    }
+                    return { ...row, old_reconstructions: oldRecs, new_reconstructions: newRecs };
+                });
+                return { ...item, rows: clonedRows };
+            });
+        } else {
+            listData = baseList;
+        }
     }
 
     //console.log('listData', listData)

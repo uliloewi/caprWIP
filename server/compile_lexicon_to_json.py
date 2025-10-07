@@ -14,6 +14,7 @@ from functools import reduce
 import tempfile
 from disjointset import DisjointSet
 from foma import FST
+from data_profiles import DataProfile, detect_profile
 import argparse
 import fileinput
 from collections import defaultdict
@@ -210,6 +211,20 @@ def compile_to_json_full_cognates(
     f.close()
 
     header = [row for row in data if row[0] and not row[0].startswith("#")][0]
+    available_fields = {col for col in header if col}
+    cognate_candidates = [cognates, "CROSSIDS", "COGIDS", "COGID"]
+    cognate_field = None
+    for candidate in cognate_candidates:
+        if candidate and candidate in available_fields:
+            cognate_field = candidate
+            break
+
+    if cognate_field is None:
+        raise KeyError(
+            "Could not determine cognate identifier column in input TSV; "
+            f"available columns: {sorted(available_fields)}"
+        )
+
     data_dict = {}
     for i, row in enumerate(data[1:]):
         if row[0].startswith("#") or not row[0].strip():
@@ -219,6 +234,8 @@ def compile_to_json_full_cognates(
             data_dict[cell_dict["ID"]] = cell_dict
     # create the board dictionary
     doculects = sorted(set([row["DOCULECT"] for row in data_dict.values()]))
+    profile: DataProfile = detect_profile(data_dict.values())
+
     boards = {
         "fstDoculects": doculects,
         "fstUp": {d: {} for d in doculects},
@@ -228,28 +245,52 @@ def compile_to_json_full_cognates(
         "columns": {},
         "syllables": {},
     }
+    boards["dataProfile"] = profile.key
 
     # fill data with content by iterating over the data_dict
+    word_cogids = {}
+
     for i, row in data_dict.items():
         idx = "word-" + str(i)
+        ipa_syllables = syllabize(row["IPA"])
+        raw_cogids = row.get(cognate_field, "").strip()
+        cogid_tokens = [token for token in raw_cogids.split(" ") if token]
+
+        if not cogid_tokens:
+            cogid_tokens = [str(row["ID"])]
+
+        if len(cogid_tokens) < len(ipa_syllables):
+            if pipeline_name == "germanic":
+                # Repeat a word-level cognate identifier for each syllable when necessary
+                cogid_tokens = (cogid_tokens * len(ipa_syllables))[: len(ipa_syllables)]
+            else:
+                # pad by repeating the last known cognate id
+                cogid_tokens = (
+                    cogid_tokens
+                    + [cogid_tokens[-1]] * (len(ipa_syllables) - len(cogid_tokens))
+                )
+        elif len(cogid_tokens) > len(ipa_syllables):
+            cogid_tokens = cogid_tokens[: len(ipa_syllables)]
+
+        word_cogids[idx] = cogid_tokens
+
         boards["words"][idx] = {
             "id": idx,
             "doculect": row["DOCULECT"],
-            # "syllables": [".".join(row["TOKENS"].split())],
-            "syllables": [".".join(r.split(" ")) for r in row["TOKENS"].split(" + ")],
-            # "syllables": syllabize(row["IPA"]),
+            "syllables": ipa_syllables,
             "gloss": row["CONCEPT"],
             "glossid": row["GLOSSID"],
+            "syllables_parsed": profile.build_syllables_parsed(row, ipa_syllables),
         }
 
 
         syl_idx = 0
-        for syllable in boards["words"][idx]["syllables"]:
+        for syllable in ipa_syllables:
             syl_id = "-".join([idx, str(syl_idx)])
             boards["syllables"][syl_id] = {
                 "id": syl_id,
                 "doculect": row["DOCULECT"],
-                "syllables": boards["words"][idx]["syllables"],
+                "syllables": ipa_syllables,
                 "gloss": boards["words"][idx]["gloss"],
                 "glossid": boards["words"][idx]["glossid"],
                 "wordID": idx,
@@ -259,7 +300,7 @@ def compile_to_json_full_cognates(
 
             # eprint(syllable_ids)
             # column ids are in fact the cognate sets
-            cogid = "column-" + row[cognates].split(" ")[syl_idx]
+            cogid = "column-" + word_cogids[idx][syl_idx]
             if cogid in boards["columns"]:
                 boards["columns"][cogid]["syllableIds"].append(syl_id)
             else:
@@ -314,14 +355,13 @@ def compile_to_json_full_cognates(
     # Loop over each CROSSID (our cognates here) and add the relevant words
     for i, entry in data_dict.items():
         idx = "word-" + str(i)
-        cogids_list = entry[cognates].split(" ")
+        cogids_list = word_cogids[idx]
 
         # now we pretend to always be working with morphemes
         # eprint(cogids_list, entry)
 
         # Now we're just making a list of all the syllables/morphemes
-        for syl, _ in enumerate(cogids_list):
-            morph_cogid = cogids_list[syl]
+        for syl, morph_cogid in enumerate(cogids_list):
 
             if not morph_cogid in rows_of_cognates:
                 rows_of_cognates[morph_cogid] = [
@@ -385,6 +425,10 @@ def compile_to_json_full_cognates(
 
                 # Apply the transducer upwards to this word
                 recs = list(fsts[row["DOCULECT"]].apply_up(syl))
+
+                if not recs and profile.allow_syllable_fallback:
+                    fallback = f"*{word.replace(' ', '')}"
+                    recs = [fallback]
 
                 # eprint(recs)
 
@@ -681,6 +725,8 @@ def compile_to_json(filepath):
         # get reconstructions and strictness
         strict = all([strictness_of_crossid[crossid] for crossid in crossids])
         clean = any([crossid in included_in_clean for crossid in crossids])
+        if not clean and profile.allow_syllable_fallback:
+            clean = True
 
         # If not included in "--clean", continue
         if not clean:
@@ -707,11 +753,9 @@ def compile_to_json(filepath):
         board_id = "board-" + str(boardid_cntr)
         boardid_cntr += 1
 
-        board_title = ", ".join(reconstructions)
+        board_title = ", ".join(reconstructions) if reconstructions else "*?"
         if len(board_title) > 12:
             board_title = board_title[:10] + "..."
-        elif not board_title:
-            board_title = "*?"
 
         board_columns = ["column-" + cid for cid in crossids]
 

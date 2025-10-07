@@ -20,8 +20,30 @@
 production = True
 
 # Constants
-language_title = {'Old_Burmese': 'OBurm', 'Achang_Longchuan': 'Acha-LC', 'Xiandao': 'Acha-XD', 'Maru': 'Maru', 'Bola': 'Bola', 'Atsi': 'Atsi', 'Lashi': 'Lashi'}
-fst_index = {'Old_Burmese': 'burmese', 'Achang_Longchuan': 'ngochang', 'Xiandao': 'xiandao', 'Maru': 'maru', 'Bola': 'bola', 'Atsi': 'atsi', 'Lashi': 'lashi'}
+language_title = {
+    'Old_Burmese': 'OBurm',
+    'Achang_Longchuan': 'Acha-LC',
+    'Xiandao': 'Acha-XD',
+    'Maru': 'Maru',
+    'Bola': 'Bola',
+    'Atsi': 'Atsi',
+    'Lashi': 'Lashi',
+    'Dutch': 'Dutch',
+    'English': 'English',
+    'German': 'German',
+}
+fst_index = {
+    'Old_Burmese': 'burmese',
+    'Achang_Longchuan': 'ngochang',
+    'Xiandao': 'xiandao',
+    'Maru': 'maru',
+    'Bola': 'bola',
+    'Atsi': 'atsi',
+    'Lashi': 'lashi',
+    'Dutch': 'dutch',
+    'English': 'english',
+    'German': 'german',
+}
 
 # Basic imports
 from hashlib import new
@@ -29,12 +51,20 @@ import sys
 import re
 import json
 import csv
+from typing import Optional
 
 from numpy import equal
-from merge_phonemes import merge_phonemes
 from functools import reduce
 from collections import Counter
 from tabulate import tabulate
+from data_profiles import (
+    BURMISH_PROFILE,
+    GERMANIC_PROFILE,
+    DataProfile,
+    detect_profile,
+)
+
+PROFILE_BY_KEY = {profile.key: profile for profile in (BURMISH_PROFILE, GERMANIC_PROFILE)}
 
 ##### ROUTINES #####
 
@@ -113,8 +143,17 @@ def back_reconstruct_list(syllable_ids, fsts, words):
     for syllable_id in syllable_ids:
         word_id, _, n = syllable_id.rpartition('-')
         n = int(n)
-        ipa = words[word_id]['syllables'][n]
-        doculect = words[word_id]['doculect']
+        word = words.get(word_id)
+        if not word:
+            if not production:
+                eprint('Missing word in board payload:', word_id)
+            continue
+        if n >= len(word['syllables']):
+            if not production:
+                eprint('Missing syllable index for word:', word_id, n)
+            continue
+        ipa = word['syllables'][n]
+        doculect = word['doculect']
 
         if not first_form:
             first_form = ipa
@@ -194,7 +233,7 @@ def read_transducer(input_json, old_new, errors):
     return ret
 
 
-def process_row(row):
+def process_row(row, profile: DataProfile):
     if row['ID'].startswith('#'):
         # internal to lingpy
         return {}
@@ -208,11 +247,7 @@ def process_row(row):
 
     word_id = 'word-' + row['ID']
     syllables = syllabize(row['IPA'])
-    syllables_parsed = [merge_phonemes(str(sch), str(tk), 'i m r t',
-                                       {'i': 'im', 'm':'m',
-                                        'r':'mnNc', 't':'t'})
-                        for sch, tk in zip(row['STRUCTURE'].split(' + '),
-                                           row['TOKENS'].split(' + '))]
+    syllables_parsed = profile.build_syllables_parsed(row, syllables)
 
     word_json = {
             'id':word_id,
@@ -246,20 +281,78 @@ def compare_fst(input_json):
         both_missing = list((old_missing) & (new_missing))
         langs_under_study = [lang for lang in langs_under_study if lang not in both_missing]
 
-    # read the word CSV
-    # import fileinput
-    csvreader = csv.DictReader(filter(lambda row: row.strip() and row[0]!='#', open('./lexicon.tsv', 'r')), dialect='excel-tab')
-
-    eprint('Processing TSV rows...')
+    csv_path = './lexicon.tsv'
     words = {}
-    for row in csvreader:
-        words.update(process_row(row))
+    profile: Optional[DataProfile] = None
+    if 'board' in input_json and 'words' in input_json['board'] and input_json['board']['words']:
+        words = input_json['board']['words']
+
+    if 'board' in input_json and input_json['board']:
+        profile_key = input_json['board'].get('dataProfile')
+        if profile_key and profile_key in PROFILE_BY_KEY:
+            profile = PROFILE_BY_KEY[profile_key]
+
+    lexicon_words = None
+
+    def load_words_from_lexicon():
+        rows = []
+        with open(csv_path, 'r') as csv_handle:
+            csvreader_local = csv.DictReader(
+                filter(lambda row: row.strip() and row[0] != '#', csv_handle),
+                dialect='excel-tab',
+            )
+            rows = list(csvreader_local)
+
+        detected_profile = detect_profile(rows)
+        lex_words = {}
+        for lex_row in rows:
+            lex_words.update(process_row(lex_row, detected_profile))
+        return lex_words, detected_profile
+
+    if not words:
+        eprint('Processing TSV rows...')
+        words, profile = load_words_from_lexicon()
+        lexicon_words = words
 
     eprint('Processing boards...')
     input_board = input_json['board']
 
     columns = input_board['columns']
     boards = input_board['boards']
+
+    needed_word_ids = set()
+    for board_id in boards:
+        for column_id in boards[board_id]['columnIds']:
+            for syllable_id in columns[column_id]['syllableIds']:
+                word_id, _, _ = syllable_id.rpartition('-')
+                needed_word_ids.add(word_id)
+
+    # Ensure every referenced word has the parsed syllable structure
+    missing_word_entries = [wid for wid in needed_word_ids if wid not in words]
+    missing_parsed_entries = [
+        wid for wid in needed_word_ids if wid in words and 'syllables_parsed' not in words[wid]
+    ]
+
+    unresolved = set()
+    if missing_word_entries or missing_parsed_entries:
+        if lexicon_words is None:
+            eprint('Processing TSV rows...')
+            lexicon_words, detected_profile = load_words_from_lexicon()
+            if profile is None:
+                profile = detected_profile
+        for wid in missing_word_entries:
+            if wid in lexicon_words:
+                words[wid] = lexicon_words[wid]
+            else:
+                unresolved.add(wid)
+        for wid in missing_parsed_entries:
+            if wid in lexicon_words:
+                words[wid]['syllables_parsed'] = lexicon_words[wid]['syllables_parsed']
+            else:
+                unresolved.add(wid)
+
+    if unresolved and not production:
+        eprint('Warning: falling back without parsed syllables for:', ', '.join(sorted(unresolved)))
 
     # list indexed by languages and initials of columns containing a certain initial in a certain language
     # column_index['i']['Old_Burmese']['p'] -> [...]
@@ -274,11 +367,9 @@ def compare_fst(input_json):
                 continue
 
             # First, guess the reconstruction
-            # print(columns, flush=True)
-            print('id', column_id, flush=True)
-            print('words', len(words), flush=True)
-            print('words', words, flush=True)
-            inferred_reconstructions, strict_reconstructions = back_reconstruct_list(columns[column_id]['syllableIds'], fsts_old, words)
+            inferred_reconstructions, strict_reconstructions = back_reconstruct_list(
+                columns[column_id]['syllableIds'], fsts_old, words
+            )
 
             # cnt[pos][doculect] → Counter of possibilities
             cnt = {}
@@ -289,15 +380,31 @@ def compare_fst(input_json):
                 word_id, _, n = syllable_id.rpartition('-')
                 n = int(n)
 
-                ipa = words[word_id]['syllables'][n]
-                doculect = words[word_id]['doculect']
-                gloss = words[word_id]['gloss']
-                syllable_parsed = words[word_id]['syllables_parsed'][n]
+                word = words.get(word_id)
+                if not word:
+                    if not production:
+                        eprint('Missing word during comparison:', word_id)
+                    continue
+                if n >= len(word['syllables']):
+                    if not production:
+                        eprint('Syllable index out of range:', word_id, n)
+                    continue
+                ipa = word['syllables'][n]
+                doculect = word['doculect']
+                gloss = word['gloss']
+                syllable_parsed_list = word.get('syllables_parsed', [])
+                if n >= len(syllable_parsed_list):
+                    if not production:
+                        eprint('Missing parsed syllable for word:', word_id, n)
+                    continue
+                syllable_parsed = syllable_parsed_list[n]
                 syllable_fields = list(zip(syllable_parsed[0].split(' '), syllable_parsed[1].split(' ')))
 
                 for position, sound in syllable_fields:
                     if position not in cnt:
                         cnt[position] = {}
+                        if position not in column_index:
+                            column_index[position] = {}
                         sylls[position] = {}
                         senses[position] = {}
                     if doculect not in cnt[position]:

@@ -79,7 +79,10 @@ def get_transducer(json_body):
 @with_json("dataPath", "transducer")
 def new_board(json_body):
     if json_body["dataPath"]:
-        return compile_to_json_full_cognates(json_body["dataPath"], json_body["transducer"])
+        transducer = json_body["transducer"]
+        if not transducer or (isinstance(transducer, str) and transducer.strip() == ""):
+            transducer = "internal"
+        return compile_to_json_full_cognates(json_body["dataPath"], transducer)
 
     return compile_to_json_full_cognates("./pipeline/output/germanic/stage3/germanic-aligned-final.tsv")
 
@@ -90,7 +93,12 @@ def refish_board(json_body):
     if (json_body['transducer'] == 'internal'):
         del json_body['transducer']
 
-    board = refish(json_body)
+    try:
+        board = refish(json_body)
+    except RuntimeError as err:
+        resp = jsonify({"message": str(err)})
+        resp.status_code = 500
+        return resp
     return board
 
 

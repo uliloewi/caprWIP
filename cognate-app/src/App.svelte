@@ -1,12 +1,27 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 import BoardList from './BoardList.svelte';
-import Board from './Board.svelte';
-import { currentBoard } from './stores';
-import type { CognateApp, FstComparison } from './types';
+	import Board from './Board.svelte';
+	import { currentBoard } from './stores';
+	import type { CognateApp, FstComparison } from './types';
+	import { apiFetch } from './api';
 import { saveAs } from 'file-saver';
 	import Select from 'svelte-select';
 	import { Circle } from "svelte-loading-spinners";
+
+const titleCollator = new Intl.Collator('en', { sensitivity: 'base', ignorePunctuation: true });
+const trimLeadingMarkers = (title: string) => title.replace(/^[*?\s]+/, '');
+const VOWEL_CHARS = new Set('aeiouyAEIOUYāēīōūáéíóúàèìòùâêîôûæœøəɘɜɛɞɐɑɒɔʌʉɯɪʊɨʏȳȳũẽĩõũỹ');
+const removeGlottalBeforeConsonant = (title: string) => {
+    const trimmed = trimLeadingMarkers(title);
+    if (trimmed.startsWith('ʔ') && trimmed.length > 1) {
+        const nextChar = trimmed[1];
+        if (!VOWEL_CHARS.has(nextChar)) {
+            return trimmed.slice(1);
+        }
+    }
+    return trimmed;
+};
 
 // Imports starting JSON data for running as POC (proof of concept).
 // This data is a little too long, which is why HMR fails. Just reload the page manually.
@@ -34,8 +49,6 @@ let statusMessage = "Board loaded."
 let statusError = false;
 	let statusLoading = false;
 
-// Where our api is
-const rootUrl = "/api"
 // Just some info about the POC inputs
 const currentSourceFile = "burmish-primitive-2000-with-ob.tsv"
 
@@ -50,21 +63,21 @@ const handleRefish = async () => {
 	statusError = false;
 	statusMessage = "Refishing current boards..."
 	
-	await fetch(`${rootUrl}/refish-board`, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json"
-		},
-		body: JSON.stringify({
-			columns: loaded.columns,
-			boards: loaded.boards,
-							syllables: loaded.syllables,
-							fstDoculects: loaded.fstDoculects,
-			transducer: useNewFst ? newFst : "internal"
+		await apiFetch(`/refish-board`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json"
+			},
+			body: JSON.stringify({
+				columns: loaded.columns,
+				boards: loaded.boards,
+								syllables: loaded.syllables,
+								fstDoculects: loaded.fstDoculects,
+				transducer: useNewFst ? newFst : "internal"
+			})
 		})
-	})
-		.then((res => res.json()))
-		.then((data: any) => {
+			.then((res => res.json()))
+			.then((data: any) => {
 			// If we have our data, we should have refished correctly.
 			console.log("Successfully refished.")
 			loaded.columns = data.columns,
@@ -87,18 +100,18 @@ const handleRefish = async () => {
 			statusLoading = true;
 			statusMessage = `Loading ${selectedDataPath.value}`;
 
-			await fetch(`${rootUrl}/new-board`, {
-		method: "POST",
-					headers: {
-			"Content-Type": "application/json"
-		},
-		body: JSON.stringify({
-			dataPath: selectedDataPath.value,
-							transducer: useNewFst ? newFst : "internal"
+				await apiFetch(`/new-board`, {
+			method: "POST",
+						headers: {
+				"Content-Type": "application/json"
+			},
+			body: JSON.stringify({
+				dataPath: selectedDataPath.value,
+								transducer: useNewFst && newFst?.trim().length ? newFst : "internal"
+			})
 		})
-	})
-		.then((res => res.json()))
-		.then((data: any) => {
+			.then((res => res.json()))
+			.then((data: any) => {
 			// If we have our data, we should have loaded correctly.
 			console.log("Successfully loaded new board.")
 							loaded = data;
@@ -117,16 +130,16 @@ const handleRefish = async () => {
 		})
 			
 			if (getExistingTransducers) {
-					await fetch(`${rootUrl}/get-transducers`, {
-							method: "POST",
-							headers: {
-									"Content-Type": "application/json"
-							},
-							body: JSON.stringify({
-									name: `${selectedDataPath.value.split("-")[0]}.txt`
-							})
-					})
-							.then((res => res.json()))
+						await apiFetch(`/get-transducers`, {
+								method: "POST",
+								headers: {
+										"Content-Type": "application/json"
+								},
+								body: JSON.stringify({
+										name: `${selectedDataPath.value.split("-")[0]}.txt`
+								})
+						})
+								.then((res => res.json()))
 							.then((data: any) => {
 									// If we have our data, we should have loaded correctly.
 									console.log("Successfully loaded existing transducer.")
@@ -216,7 +229,7 @@ $: if (files) {
 	let dataPaths = [];
 	let selectedDataPath;
 	const loadDataPaths = async () => {
-			return fetch(`${rootUrl}/list-inputs`, {
+			return apiFetch(`/list-inputs`, {
 		method: "GET",
 	})
 		.then((res => res.json()))
@@ -278,7 +291,16 @@ $: if (files) {
 			{#if showCognateInterface}
 					{#if hasLoaded}
 							<!-- The list of all possible boards -->
-							<BoardList boards={Object.values(loaded.boards).sort((a, b) => a.title > b.title ? 1 : -1)} />
+							<BoardList boards={Object.values(loaded.boards).sort((a, b) => {
+								const aPrimary = removeGlottalBeforeConsonant(a.title);
+								const bPrimary = removeGlottalBeforeConsonant(b.title);
+								const primary = titleCollator.compare(aPrimary, bPrimary);
+								if (primary !== 0) return primary;
+								const aSecondary = trimLeadingMarkers(a.title);
+								const bSecondary = trimLeadingMarkers(b.title);
+								const secondary = titleCollator.compare(aSecondary, bSecondary);
+								return secondary !== 0 ? secondary : titleCollator.compare(a.title, b.title);
+							})} />
 							<!-- The current board's title and some relevant options -->
 							<div class="board-title">
 									<h1>{loaded.boards[$currentBoard].title}</h1>

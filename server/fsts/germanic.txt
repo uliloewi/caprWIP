@@ -1,61 +1,22 @@
 #!/usr/local/bin/foma -f
-# Basic FST for the Germanic dataset
+# Minimal Proto-Germanic toy transducers.
 
-# Dutch
-define Dutch [] ;
+define ProtoVowel [a|e|i|o|u|æ|ɑ|ɔ|ə|ɛ|ɜ|ʉ|ʊ|ø|œ|y];
+define ProtoConsonant [b|d|f|g|h|j|k|l|m|n|p|r|s|t|v|w|x|z|ð|ŋ|ɡ|ɣ|ɪ|ʃ|ʋ|ʌ|ʤ|ʧ];
+define ProtoSymbol [ProtoVowel|ProtoConsonant];
+define ProtoWord ProtoSymbol*;
 
-clear
-push Dutch
-save stack dutch.bin
-
-# English (Needs fixing)
-def PGC "b " | "d " | "f " | "g " | "gʷ " | "j " | "k " | "kʷ " | "kː " | "l " | "lː " | "m " | "mː " | "n " | "nː " | "p " | "pː " | "r " | "s " | "t " | "w " | "x " | "xʷ " | "z " | "θ ";
-
-def PGV "a " | "ai " | "au " | "e " | "eu " | "eː " | "i " | "iː " | "o " | "oː " | "u " | "uː ";
-
-def PGSyllable PGC* PGV* ;
-
-def PGWord PGSyllable* ;
-
-def SK "s " "k " -> "ʃ ";
-def XS "x " "s " -> "k " "s ";
-def XH "x " -> "h ";
-def KN "k " "n " -> "n ";
-
-# hacks
-def AR "a " "r " -> "ɜ " "r ";
-def ER "ɜ " "r " -> "ɜː ";
-
-define English PGWord .o. SK .o. XS .o. XH .o. KN .o. AR .o. ER;
-
-clear
-push English
+define English ProtoWord;
+clear stack
+regex English;
 save stack english.bin
 
-# German
-def PGC "b " | "d " | "f " | "g " | "gʷ " | "j " | "k " | "kʷ " | "kː " | "l " | "lː " | "m " | "mː " | "n " | "nː " | "p " | "pː " | "r " | "s " | "t " | "w " | "x " | "xʷ " | "z " | "θ ";
+define Dutch ProtoWord;
+clear stack
+regex Dutch;
+save stack dutch.bin
 
-def PGV "a " | "ai " | "au " | "e " | "eu " | "eː " | "i " | "iː " | "o " | "oː " | "u " | "uː ";
-
-def PGSyllable PGC* PGV* ;
-
-def PGWord PGSyllable* ;
-
-def Grimm "p " -> "pf ", "t " -> "ts ";
-
-def OE "oː " -> "ə ";
-
-def SK "s " "k " -> "ʃ ";
-
-# hacks
-def TD "θ " -> "d ";
-def AL "iː " "l " -> "aː " "l ";
-
-# regex PGWord ;
-# regex Grimm .o. TD .o. OE .o. SK;
-
-def German PGWord .o. Grimm .o. TD .o. OE .o. SK .o. AL;
-
-clear
-push German
+define German ProtoWord;
+clear stack
+regex German;
 save stack german.bin

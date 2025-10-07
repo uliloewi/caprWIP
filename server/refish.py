@@ -229,10 +229,19 @@ def refish(jsonfile, csvfile="lexicon.tsv", fstfile="refishing-fst2.txt"):
         )
         eprint("\n".join(output.split("\n")[-5:]))
         for doculect_name in input_board["fstDoculects"]:
-            if os.path.isfile(fst_index[doculect_name] + ".bin"):
-                fsts_new[doculect_name] = FST.load(fst_index[doculect_name] + ".bin")
+            fst_path = fst_index.get(doculect_name)
+            if not fst_path:
+                eprint(f"[refish] Skipping {doculect_name}: not in fst_index")
+                continue
+            bin_path = fst_path + ".bin"
+            if os.path.isfile(bin_path):
+                fsts_new[doculect_name] = FST.load(bin_path)
+            else:
+                eprint(f"[refish] Skipping {doculect_name}: missing {bin_path}")
         os.chdir(script_path)
         eprint("FSTs loaded:", ", ".join(fsts_new))
+        if not new_transducer.strip() and not fsts_new:
+            raise RuntimeError("No transducer available: turn on 'Use new FST?' or provide a default transducer file (refishing-fst2.txt).")
 
     # read the word CSV
     input_syllables = input_board["syllables"]
